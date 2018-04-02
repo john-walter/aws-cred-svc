@@ -1,0 +1,27 @@
+#!/bin/bash
+current_dir=`dirname "$BASH_SOURCE"`
+if [ "$current_dir" = "." ]; then 
+    current_dir="$(pwd)"
+fi
+as=$(cat <<'AS'
+set program to current_dir & "/bin/aws-cred-svc-macos"
+set setup to "#!/bin/bash
+ifconfig lo0 alias 169.254.169.254 255.255.255.255
+echo '
+rdr pass on lo0 inet proto tcp from any to 169.254.169.254 port 80 -> 169.254.169.254 port 12319
+' | pfctl -ef -
+"
+try
+    do shell script setup with administrator privileges
+end try
+tell application "Terminal"
+    do script ""
+    activate
+    tell application "System Events"
+        keystroke program
+        key code 36
+    end tell
+end tell
+AS
+)
+osascript -e "set current_dir to \"$current_dir\"" -e "$as"

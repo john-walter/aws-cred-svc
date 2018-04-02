@@ -1,0 +1,12 @@
+#!/bin/bash
+current_dir=`dirname "$BASH_SOURCE"`
+if [ "$current_dir" = "." ]; then
+    current_dir="$(pwd)"
+fi
+cd "$current_dir"
+sudo su -c "
+ifconfig lo:169 169.254.169.254 netmask 255.255.255.255 up
+echo 1 > /proc/sys/net/ipv4/ip_forward
+iptables -t nat -A PREROUTING -i lo:169 -p tcp --dport 80 -j DNAT -j REDIRECT --to-port 12319
+"
+./bin/aws-cred-svc-linux
