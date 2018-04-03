@@ -32,6 +32,7 @@ var arnMatch = regexp.MustCompile("arn:aws:iam::\\S*")
 var sessionMutex sync.Mutex
 
 func main() {
+	stscreds.DefaultDuration = time.Minute * 60
 	cfg, err := ini.Load(SharedCredentialsFilename())
 	if err != nil {
 		os.Exit(1)
@@ -105,15 +106,20 @@ func Session(profileName string) aws.Credentials {
 
 	if !gotSession || session.Expired() {
 		var mfaEnabled bool
-		cfg, confErr := external.LoadDefaultAWSConfig(
-			external.WithMFATokenFunc(func() (string, error) {
-				mfaEnabled = true
-				code, _, err := dlgs.Password("Password", "Enter your AWS MFA code: ")
-				return code, err
-			}),
-			external.WithSharedConfigProfile(profileName),
-		)
-		if confErr == nil {
+		var cfg aws.Config
+		if gotSession {
+			cfg = credentialsConf[profileName]
+		} else {
+			cfg, _ = external.LoadDefaultAWSConfig(
+				external.WithMFATokenFunc(func() (string, error) {
+					mfaEnabled = true
+					code, _, err := dlgs.Password("Password", "Enter your AWS MFA code: ")
+					return code, err
+				}),
+				external.WithSharedConfigProfile(profileName),
+			)
+		}
+		if &cfg != nil {
 			// This is hacky and needs a better solution - parse the raw credentialprovider string output and look for a role ARN
 			roleArnMatch := arnMatch.FindAllString(fmt.Sprintf("%v", cfg.Credentials), 1)
 			// keep looping around cred retrieval three times - in case someone just entered their mfa code wrong
@@ -130,7 +136,7 @@ func Session(profileName string) aws.Credentials {
 				}
 			}
 		}
-	} else if session.Expires.UTC().Sub(time.Now().UTC()).Minutes() < 5 {
+	} else if session.Expires.UTC().Sub(time.Now().UTC()).Minutes() < 20 {
 		newConf := credentialsConf[profileName].Copy()
 		newConf.Credentials = aws.NewStaticCredentialsProvider(session.AccessKeyID, session.SecretAccessKey, session.SessionToken)
 		session, _ = stscreds.NewAssumeRoleProvider(sts.New(newConf), credentialsArn[profileName]).Retrieve()
@@ -202,7 +208,7 @@ func PresentCredentials(w http.ResponseWriter, r *http.Request) {
 			"AccessKeyId": session.AccessKeyID,
 			"Code": "Success",
 			"Expiration": session.Expires.Format("2006-01-02T15:04:05Z"),
-			"LastUpdated": time.Now().Format("2006-01-02T15:04:05Z"),
+			"LastUpdated": time.Now().UTC().Format("2006-01-02T15:04:05Z"),
 			"SecretAccessKey": session.SecretAccessKey,
 			"Token": session.SessionToken,
 			"Type": "AWS-HMAC",
