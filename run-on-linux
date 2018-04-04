@@ -6,7 +6,7 @@ fi
 cd "$current_dir"
 sudo su -c "
 ifconfig lo:169 169.254.169.254 netmask 255.255.255.255 up
-echo 1 > /proc/sys/net/ipv4/ip_forward
-iptables -t nat -A PREROUTING -i lo:169 -p tcp --dport 80 -j DNAT -j REDIRECT --to-port 12319
+iptables -t nat -D OUTPUT -p tcp -d 169.254.169.254 --dport 80 -j DNAT --to-destination 169.254.169.254:12319
+iptables -t nat -I OUTPUT -p tcp -d 169.254.169.254 --dport 80 -j DNAT --to-destination 169.254.169.254:12319
 "
 ./bin/aws-cred-svc-linux
