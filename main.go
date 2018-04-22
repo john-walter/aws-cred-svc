@@ -26,7 +26,8 @@ var credentialsConf = map[string]aws.Config{}
 var credentialsSts = 	map[string]aws.Credentials{}
 var credentialsArn = map[string]string{}
 var credentialProfiles = []string{}
-var defaultProfile = ""
+var defaultProfileName = ""
+var defaultProfileRoute = "latest"
 
 var arnMatch = regexp.MustCompile("arn:aws:iam::\\S*")
 var sessionMutex sync.Mutex
@@ -38,7 +39,9 @@ func main() {
 		os.Exit(1)
 	}
 	for _, profileName := range cfg.SectionStrings() {
-		credentialProfiles = append(credentialProfiles, strings.Replace(profileName, "profile ", "", -1))
+		if profileName != defaultProfileRoute {
+			credentialProfiles = append(credentialProfiles, strings.Replace(profileName, "profile ", "", -1))
+		}
 	}
 	WebSvr()
 	Repl()
@@ -59,18 +62,18 @@ func UserHomeDir() string {
 
 func WebSvr() {
 	router := mux.NewRouter().StrictSlash(true)
-	router.HandleFunc("/latest/meta-data/instance-id", MockInstanceId)
-	router.HandleFunc("/latest/meta-data/local-hostname", Localhost)
-	router.HandleFunc("/latest/meta-data/hostname", Localhost)
-	router.HandleFunc("/latest/meta-data/public-hostname", Localhost)
-	router.HandleFunc("/latest/meta-data/mac", MockMac)
-	router.HandleFunc("/latest/meta-data/network/interfaces/macs/00:00:00:00:00:00/vpc-id", MockVpc)
-	router.HandleFunc("/latest/meta-data/local-ipv4", Loopback)
-	router.HandleFunc("/latest/meta-data/instance-type", MockInstanceType)
-	router.HandleFunc("/latest/dynamic/instance-identity/document", MockIdentityDoc)
-	router.HandleFunc("/latest/meta-data/iam/security-credentials/", DefaultProfile)
-	router.HandleFunc("/latest/meta-data/iam/security-credentials/{profile}", PresentCredentials)
-	router.HandleFunc("/latest/meta-data/iam/security-credentials/{profile}/use", SetDefaultProfile)
+	router.HandleFunc("/{profile}/meta-data/instance-id", MockInstanceId)
+	router.HandleFunc("/{profile}/meta-data/local-hostname", Localhost)
+	router.HandleFunc("/{profile}/meta-data/hostname", Localhost)
+	router.HandleFunc("/{profile}/meta-data/public-hostname", Localhost)
+	router.HandleFunc("/{profile}/meta-data/mac", MockMac)
+	router.HandleFunc("/{profile}/meta-data/network/interfaces/macs/00:00:00:00:00:00/vpc-id", MockVpc)
+	router.HandleFunc("/{profile}/meta-data/local-ipv4", Loopback)
+	router.HandleFunc("/{profile}/meta-data/instance-type", MockInstanceType)
+	router.HandleFunc("/{profile}/dynamic/instance-identity/document", MockIdentityDoc)
+	router.HandleFunc("/{profile}/meta-data/iam/security-credentials/", DefaultProfile)
+	router.HandleFunc("/{profile}/meta-data/iam/security-credentials/default", PresentCredentials)
+	router.HandleFunc("/{profile}/use", SetDefaultProfile)
 	go func() {
 		log.Fatal(http.ListenAndServe("169.254.169.254:12319", router))
 	}()
@@ -81,15 +84,15 @@ func Repl() {
 	for true {
 		fmt.Println("\nSelect an AWS profile: \n")
 		for idx, profileName := range credentialProfiles {
-			activeIndicator := func() string { if profileName == defaultProfile { return " (active)" } else { return "" } }
+			activeIndicator := func() string { if profileName == defaultProfileName { return " (active)" } else { return "" } }
 			fmt.Println(strconv.FormatInt(int64(idx), 10) + " " + profileName + activeIndicator())
 		}
 		fmt.Print("\n> ")
 		fmt.Scanln(&input)
 		profileIdx, _ := strconv.ParseInt(input, 10, 0)
 		if 0 <= profileIdx && int(profileIdx) < len(credentialProfiles) {
-			defaultProfile = credentialProfiles[profileIdx]
-			Session(defaultProfile)
+			defaultProfileName = credentialProfiles[profileIdx]
+			Session(defaultProfileName)
 		}
 	}
 }
@@ -153,7 +156,7 @@ func MockInstanceId(w http.ResponseWriter, r *http.Request) {
 }
 
 func DefaultProfile(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprint(w, "defaultprofile")
+	fmt.Fprint(w, "default")
 }
 
 func Localhost(w http.ResponseWriter, r *http.Request) {
@@ -177,10 +180,20 @@ func MockInstanceType(w http.ResponseWriter, r *http.Request) {
 }
 
 func MockIdentityDoc(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	vars := mux.Vars(r)
+	if vars["profile"] == defaultProfileRoute && defaultProfileName != "" {
+		vars["profile"] = defaultProfileName
+	}
+	cfg, gotConf := credentialsConf[vars["profile"]]
+
+	region := "us-east-1"
+	if gotConf {
+		region = cfg.Region
+	}
+
 	ident, _ := json.Marshal(map[string]string{
 		"privateIp": "127.0.0.1",
-		"availabilityZone": "us-west-2a",
+		"availabilityZone": region + "a",
 		"devpayProductCodes": "",
 		"version": "2010-08-31",
 		"instanceId": "i-1234567890abcdef0",
@@ -191,15 +204,15 @@ func MockIdentityDoc(w http.ResponseWriter, r *http.Request) {
 		"ramdiskId": "",
 		"imageId": "ami-1562d075",
 		"pendingTime": "2017-03-13T17:13:27Z",
-		"region": "us-west-2",
+		"region": region,
  	})
 	fmt.Fprint(w, string(ident))
 }
 
 func PresentCredentials(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	if vars["profile"] == "defaultprofile" && defaultProfile != "" {
-		vars["profile"] = defaultProfile
+	if vars["profile"] == defaultProfileRoute && defaultProfileName != "" {
+		vars["profile"] = defaultProfileName
 	}
 	session := Session(vars["profile"])
 
@@ -223,9 +236,10 @@ func SetDefaultProfile(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	_, gotSession := credentialsSts[vars["profile"]]
 	if gotSession {
-		defaultProfile = vars["profile"]
+		defaultProfileName = vars["profile"]
+		PresentCredentials(w, r)
 	} else {
 		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, "")
 	}
-	fmt.Fprint(w, "")
 }
